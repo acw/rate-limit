@@ -94,17 +94,15 @@ rateLimitExecution pertime action =
 
 -- |The most generic way to rate limit an invocation.
 generateRateLimitedFunction :: TimeUnit t =>
-  RateLimit t               ->
-  (req -> IO resp)          ->
-  ResultsCombiner req resp  ->
-  IO (req -> IO resp)
-generateRateLimitedFunction
-  ratelimit   -- ^What is the rate limit for this action?
-  action      -- ^What is the action you want to rate limit, given as an
-              --  a MonadIO function from requests to responses?
-  combiner    -- ^A function that can combine requests if rate limiting
-              --  happens. If you cannot combine two requests into one
-              --  request, we suggest using 'dontCombine'.
+  RateLimit t -- ^What is the rate limit for this action
+  -> (req -> IO resp) -- ^What is the action you want to rate limit, given as an
+                      --  a MonadIO function from requests to responses?
+  -> ResultsCombiner req resp -- ^A function that can combine requests if rate
+                              -- limiting happens. If you cannot combine two
+                              -- requests into one request, we suggest using
+                              -- 'dontCombine'.
+  -> IO (req -> IO resp)
+generateRateLimitedFunction ratelimit action combiner
   = do chan <- newChan
        forkIO $ runner (-42) chan
        return $ resultFunction chan
