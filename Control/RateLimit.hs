@@ -30,6 +30,11 @@
 --
 module Control.RateLimit(
          generateRateLimitedFunction
+       , RateLimit(..)
+       , ResultsCombiner
+       , dontCombine
+       , rateLimitInvocation
+       , rateLimitExecution
        )
  where
 
@@ -38,6 +43,7 @@ import Control.Concurrent.Chan
 import Control.Monad(when)
 import Data.Time.Units
 
+-- |The rate at which to limit an action.
 data TimeUnit a => RateLimit a =
     PerInvocation a -- ^Rate limit the action to invocation once per time
                     --  unit. With this option, the time it takes for the
