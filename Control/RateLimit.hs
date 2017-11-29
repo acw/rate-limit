@@ -44,7 +44,7 @@ import Control.Monad(when)
 import Data.Time.Units
 
 -- |The rate at which to limit an action.
-data TimeUnit a => RateLimit a =
+data RateLimit a =
     PerInvocation a -- ^Rate limit the action to invocation once per time
                     --  unit. With this option, the time it takes for the
                     --  action to take place is not taken into consideration
