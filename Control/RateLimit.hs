@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 -- |This module implements rate-limiting functionality for Haskell programs.
 -- Rate-limiting is useful when trying to control / limit access to a
 -- particular resource over time. For example, you might want to limit the
@@ -39,8 +41,9 @@ module Control.RateLimit(
  where
 
 import Control.Concurrent
-import Control.Concurrent.Chan
+import Control.Concurrent.STM
 import Control.Monad(when)
+import Data.Functor(($>))
 import Data.Time.Units
 
 -- |The rate at which to limit an action.
@@ -99,7 +102,8 @@ rateLimitExecution pertime action =
   generateRateLimitedFunction (PerExecution pertime) action dontCombine
 
 -- |The most generic way to rate limit an invocation.
-generateRateLimitedFunction :: TimeUnit t =>
+generateRateLimitedFunction :: forall req resp t.
+  TimeUnit t =>
   RateLimit t -- ^What is the rate limit for this action
   -> (req -> IO resp) -- ^What is the action you want to rate limit, given as an
                       --  a MonadIO function from requests to responses?
@@ -109,10 +113,11 @@ generateRateLimitedFunction :: TimeUnit t =>
                               -- 'dontCombine'.
   -> IO (req -> IO resp)
 generateRateLimitedFunction ratelimit action combiner
-  = do chan <- newChan
+  = do chan <- atomically newTChan
        forkIO $ runner (-42) chan
        return $ resultFunction chan
  where
+  runner :: Integer -> TChan (req, MVar resp) -> IO a
   runner lastTime chan = do
     -- should we wait for some amount of time?
     now <- toMicroseconds `fmap` (getCPUTimeWithUnit :: IO Microsecond)
@@ -120,7 +125,7 @@ generateRateLimitedFunction ratelimit action combiner
       let delay = toMicroseconds (getRate ratelimit) - (now - lastTime)
       threadDelay (fromIntegral delay)
     -- OK, we're ready for the next item
-    (req, respMV) <- readChan chan
+    (req, respMV) <- atomically $ readTChan chan
     let baseHandler resp = putMVar respMV resp
     -- can we combine this with any other requests on the pipe?
     (req', finalHandler) <- updateRequestWithFollowers chan req baseHandler
@@ -129,31 +134,46 @@ generateRateLimitedFunction ratelimit action combiner
       else action req' >>= finalHandler
     nextTime <- toMicroseconds `fmap` (getCPUTimeWithUnit :: IO Microsecond)
     runner nextTime chan
+
   -- updateRequestWithFollowers: We have one request. Can we combine it with
   -- some other requests into a cohesive whole?
+  updateRequestWithFollowers :: TChan (req, MVar resp) ->
+                                req ->
+                                (resp -> IO ()) ->
+                                IO (req, (resp -> IO ()))
   updateRequestWithFollowers chan req handler = do
-    isEmpty <- isEmptyChan chan
+    isEmpty <- atomically $ isEmptyTChan chan
     if isEmpty
       then return (req, handler)
-      else do (next, nextRespMV) <- readChan chan
-              case combiner req next of
-                Nothing -> do
-                  unGetChan chan (next, nextRespMV)
+      else do mCombinedAndMV <- atomically $ do
+                tup@(next, nextRespMV) <- readTChan chan
+                case combiner req next of
+                  Nothing -> unGetTChan chan tup $> Nothing
+                  Just combined -> return $ Just (combined, nextRespMV)
+
+              case mCombinedAndMV of
+                Nothing ->
                   return (req, handler)
-                Just (req', splitResponse) ->
-                  updateRequestWithFollowers chan req' $ \ resp -> do
+                Just ((req', splitResponse), nextRespMV) ->
+                  updateRequestWithFollowers chan req' $ \resp -> do
                     let (theirs, mine) = splitResponse resp
                     putMVar nextRespMV mine
                     handler theirs
+
   -- shouldFork: should we fork or execute the action in place?
+  shouldFork :: RateLimit t -> Bool
   shouldFork (PerInvocation _) = True
   shouldFork (PerExecution _)  = False
+
   -- getRate: what is the rate of this action?
+  getRate :: RateLimit t -> t
   getRate (PerInvocation x)    = x
   getRate (PerExecution  x)    = x
+
   -- resultFunction: the function (partially applied on the channel) that will
   -- be returned from this monstrosity.
+  resultFunction :: TChan (req, MVar resp) -> req -> IO resp
   resultFunction chan req = do
     respMV <- newEmptyMVar
-    writeChan chan (req, respMV)
+    atomically $ writeTChan chan (req, respMV)
     takeMVar respMV
