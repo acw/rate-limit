@@ -42,7 +42,7 @@ module Control.RateLimit(
 
 import Control.Concurrent
 import Control.Concurrent.STM
-import Control.Monad(when)
+import Control.Monad(void, when)
 import Data.Functor(($>))
 import Data.Time.Units
 
@@ -114,7 +114,7 @@ generateRateLimitedFunction :: forall req resp t.
   -> IO (req -> IO resp)
 generateRateLimitedFunction ratelimit action combiner
   = do chan <- atomically newTChan
-       forkIO $ runner (-42) chan
+       void $ forkIO $ runner (-42) chan
        return $ resultFunction chan
  where
   currentMicros :: IO Integer
