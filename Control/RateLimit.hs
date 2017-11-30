@@ -117,10 +117,12 @@ generateRateLimitedFunction ratelimit action combiner
        forkIO $ runner (-42) chan
        return $ resultFunction chan
  where
+  currentMicros :: IO Integer
+  currentMicros = toMicroseconds `fmap` (getCPUTimeWithUnit :: IO Microsecond)
   runner :: Integer -> TChan (req, MVar resp) -> IO a
   runner lastTime chan = do
     -- should we wait for some amount of time?
-    now <- toMicroseconds `fmap` (getCPUTimeWithUnit :: IO Microsecond)
+    now <- currentMicros
     when (now - lastTime < toMicroseconds (getRate ratelimit)) $ do
       let delay = toMicroseconds (getRate ratelimit) - (now - lastTime)
       threadDelay (fromIntegral delay)
@@ -132,7 +134,7 @@ generateRateLimitedFunction ratelimit action combiner
     if shouldFork ratelimit
       then forkIO (action req' >>= finalHandler) >> return ()
       else action req' >>= finalHandler
-    nextTime <- toMicroseconds `fmap` (getCPUTimeWithUnit :: IO Microsecond)
+    nextTime <- currentMicros
     runner nextTime chan
 
   -- updateRequestWithFollowers: We have one request. Can we combine it with
