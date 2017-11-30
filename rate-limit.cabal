@@ -1,5 +1,5 @@
 Name: rate-limit
-Version: 1.1.1
+Version: 1.2.0
 Build-Type: Simple
 Cabal-Version: >= 1.6
 License: BSD3
