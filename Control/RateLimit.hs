@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- |This module implements rate-limiting functionality for Haskell programs.
+-- | This module implements rate-limiting functionality for Haskell programs.
 -- Rate-limiting is useful when trying to control / limit access to a
 -- particular resource over time. For example, you might want to limit the
 -- rate at which you make requests to a server, as an administrator may block
@@ -30,44 +30,43 @@
 -- limiting functionality, but specialized versions of it are also exported
 -- for convenience.
 --
-module Control.RateLimit(
-         generateRateLimitedFunction
-       , RateLimit(..)
-       , ResultsCombiner
-       , dontCombine
-       , rateLimitInvocation
-       , rateLimitExecution
-       )
- where
+module Control.RateLimit (
+    generateRateLimitedFunction
+  , RateLimit(..)
+  , ResultsCombiner
+  , dontCombine
+  , rateLimitInvocation
+  , rateLimitExecution
+  ) where
 
 import Control.Concurrent
 import Control.Concurrent.STM
-import Control.Monad(void, when)
-import Data.Functor(($>))
+import Control.Monad (void, when)
+import Data.Functor (($>))
 import Data.Time.Units
 
--- |The rate at which to limit an action.
-data RateLimit a =
-    PerInvocation a -- ^Rate limit the action to invocation once per time
-                    --  unit. With this option, the time it takes for the
-                    --  action to take place is not taken into consideration
-                    --  when computing the rate, only the time between 
-                    --  invocations of the action. This may cause the action
-                    --  to execute concurrently, as an invocation may occur
-                    --  while an action is still running.
-  | PerExecution a  -- ^Rate limit the action to execution once per time
-                    --  unit. With this option, the time it takes for the
-                    --  action to take plase is taken into account, and all
-                    --  actions will necessarily occur sequentially. However,
-                    --  if your action takes longer than the time unit given,
-                    --  then the rate of execution will be slower than the
-                    --  given unit of time.
+-- | The rate at which to limit an action.
+data RateLimit a
+  = PerInvocation a -- ^ Rate limit the action to invocation once per time
+                    -- unit. With this option, the time it takes for the
+                    -- action to take place is not taken into consideration
+                    -- when computing the rate, only the time between
+                    -- invocations of the action. This may cause the action
+                    -- to execute concurrently, as an invocation may occur
+                    -- while an action is still running.
+  | PerExecution a  -- ^ Rate limit the action to execution once per time
+                    -- unit. With this option, the time it takes for the
+                    -- action to take plase is taken into account, and all
+                    -- actions will necessarily occur sequentially. However,
+                    -- if your action takes longer than the time unit given,
+                    -- then the rate of execution will be slower than the
+                    -- given unit of time.
 
--- |In some cases, if two requests are waiting to be run, it may be possible
+-- | In some cases, if two requests are waiting to be run, it may be possible
 -- to combine them into a single request and thus increase the overall
 -- bandwidth. The rate limit system supports this, but requires a little
 -- additional information to make everything work out right. You may also
--- need to do something a bit wonky with your types to make this work ... 
+-- need to do something a bit wonky with your types to make this work ...
 -- sorry.
 --
 -- The basic idea is this: Given two requests, you can either return Nothing
@@ -83,42 +82,50 @@ type ResultsCombiner req resp = req -> req -> Maybe (req, resp -> (resp, resp))
 dontCombine :: ResultsCombiner a b
 dontCombine _ _ = Nothing
 
--- |Rate limit the invocation of a given action. This is equivalent to calling
+-- | Rate limit the invocation of a given action. This is equivalent to calling
 -- 'generateRateLimitedFunction' with a 'PerInvocation' rate limit and the
 -- 'dontCombine' combining function.
-rateLimitInvocation :: TimeUnit t => 
-                       t -> (req -> IO resp) ->
-                       IO (req -> IO resp)
+rateLimitInvocation :: TimeUnit t
+                    => t
+                    -> (req -> IO resp)
+                    -> IO (req -> IO resp)
 rateLimitInvocation pertime action =
   generateRateLimitedFunction (PerInvocation pertime) action dontCombine
 
--- |Rate limit the execution of a given action. This is equivalent to calling
+-- | Rate limit the execution of a given action. This is equivalent to calling
 -- 'generateRateLimitedFunction' with a 'PerExecution' rate limit and the
 -- 'dontCombine' combining function.
-rateLimitExecution :: TimeUnit t =>
-                      t -> (req -> IO resp) ->
-                      IO (req -> IO resp)
+rateLimitExecution :: TimeUnit t
+                   => t
+                   -> (req -> IO resp)
+                   -> IO (req -> IO resp)
 rateLimitExecution pertime action =
   generateRateLimitedFunction (PerExecution pertime) action dontCombine
 
--- |The most generic way to rate limit an invocation.
-generateRateLimitedFunction :: forall req resp t.
-  TimeUnit t =>
-  RateLimit t -- ^What is the rate limit for this action
-  -> (req -> IO resp) -- ^What is the action you want to rate limit, given as an
-                      --  a MonadIO function from requests to responses?
-  -> ResultsCombiner req resp -- ^A function that can combine requests if rate
-                              -- limiting happens. If you cannot combine two
-                              -- requests into one request, we suggest using
-                              -- 'dontCombine'.
-  -> IO (req -> IO resp)
-generateRateLimitedFunction ratelimit action combiner
-  = do chan <- atomically newTChan
-       void $ forkIO $ runner (-42) chan
-       return $ resultFunction chan
- where
+-- | The most generic way to rate limit an invocation.
+generateRateLimitedFunction :: forall req resp t
+                             . TimeUnit t
+                            => RateLimit t
+                               -- ^ What is the rate limit for this action
+                            -> (req -> IO resp)
+                               -- ^ What is the action you want to rate limit,
+                               -- given as an a MonadIO function from requests
+                               -- to responses?
+                            -> ResultsCombiner req resp
+                               -- ^ A function that can combine requests if
+                               -- rate limiting happens. If you cannot combine
+                               -- two requests into one request, we suggest
+                               -- using 'dontCombine'.
+                            -> IO (req -> IO resp)
+generateRateLimitedFunction ratelimit action combiner = do
+  chan <- atomically newTChan
+  void $ forkIO $ runner (-42) chan
+  return $ resultFunction chan
+
+  where
   currentMicros :: IO Integer
   currentMicros = toMicroseconds `fmap` (getCPUTimeWithUnit :: IO Microsecond)
+
   runner :: Integer -> TChan (req, MVar resp) -> IO a
   runner lastTime chan = do
     -- should we wait for some amount of time?
@@ -139,10 +146,10 @@ generateRateLimitedFunction ratelimit action combiner
 
   -- updateRequestWithFollowers: We have one request. Can we combine it with
   -- some other requests into a cohesive whole?
-  updateRequestWithFollowers :: TChan (req, MVar resp) ->
-                                req ->
-                                (resp -> IO ()) ->
-                                IO (req, (resp -> IO ()))
+  updateRequestWithFollowers :: TChan (req, MVar resp)
+                             -> req
+                             -> (resp -> IO ())
+                             -> IO (req, (resp -> IO ()))
   updateRequestWithFollowers chan req handler = do
     isEmpty <- atomically $ isEmptyTChan chan
     if isEmpty
@@ -169,8 +176,8 @@ generateRateLimitedFunction ratelimit action combiner
 
   -- getRate: what is the rate of this action?
   getRate :: RateLimit t -> t
-  getRate (PerInvocation x)    = x
-  getRate (PerExecution  x)    = x
+  getRate (PerInvocation x) = x
+  getRate (PerExecution  x) = x
 
   -- resultFunction: the function (partially applied on the channel) that will
   -- be returned from this monstrosity.
