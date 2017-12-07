@@ -41,7 +41,7 @@ module Control.RateLimit (
 
 import Control.Concurrent
 import Control.Concurrent.STM
-import Control.Monad (void, when)
+import Control.Monad (void)
 import Data.Functor (($>))
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Time.Units
@@ -120,7 +120,7 @@ generateRateLimitedFunction :: forall req resp t
                             -> IO (req -> IO resp)
 generateRateLimitedFunction ratelimit action combiner = do
   chan <- atomically newTChan
-  void $ forkIO $ runner (-42) chan
+  void $ forkIO $ runner Nothing 0 chan
   return $ resultFunction chan
 
   where
@@ -129,23 +129,44 @@ generateRateLimitedFunction ratelimit action combiner = do
     toMicroseconds . (fromIntegral :: Int -> Picosecond) . fromEnum <$>
       getPOSIXTime
 
-  runner :: Integer -> TChan (req, MVar resp) -> IO a
-  runner lastTime chan = do
-    -- should we wait for some amount of time?
-    now <- currentMicroseconds
-    when (now - lastTime < toMicroseconds (getRate ratelimit)) $ do
-      let delay = toMicroseconds (getRate ratelimit) - (now - lastTime)
-      threadDelay (fromIntegral delay)
-    -- OK, we're ready for the next item
+  -- runner: Repeatedly run requests from the channel, keeping track of the
+  -- time immediately before the last request, and a "sleep discount" allowance
+  -- we can spend (i.e. reduce future sleep times) based on the amount of time
+  -- we've "overslept" in the past.
+  runner :: Maybe Integer -> Integer -> TChan (req, MVar resp) -> IO a
+  runner mLastRun lastAllowance chan = do
     (req, respMV) <- atomically $ readTChan chan
     let baseHandler resp = putMVar respMV resp
-    -- can we combine this with any other requests on the pipe?
+
+    -- should we wait for some amount of time before running?
+    beforeWait <- currentMicroseconds
+    let targetPeriod     = toMicroseconds $ getRate ratelimit
+        timeSinceLastRun = case mLastRun of
+          Just lastRun -> beforeWait - lastRun
+          Nothing -> negate targetPeriod
+        targetDelay      = targetPeriod - timeSinceLastRun - lastAllowance
+
+    -- sleep if necessary; determine sleep-discount allowance for next round
+    nextAllowance <- if targetDelay < 0
+      then pure $ abs targetDelay -- we have more allowance left
+      else do
+        -- sleep for *at least* our target delay time
+        threadDelay $ fromIntegral targetDelay
+        afterWait <- currentMicroseconds
+        let slept     = afterWait - beforeWait
+            overslept = slept - targetDelay
+        return overslept
+
+    -- before running, can we combine this with any other requests on the pipe?
     (req', finalHandler) <- updateRequestWithFollowers chan req baseHandler
+    let run = action req' >>= finalHandler
+
     beforeRun <- currentMicroseconds
     if shouldFork ratelimit
-      then forkIO (action req' >>= finalHandler) >> return ()
-      else action req' >>= finalHandler
-    runner beforeRun chan
+      then void $ forkIO run
+      else run
+
+    runner (Just beforeRun) nextAllowance chan
 
   -- updateRequestWithFollowers: We have one request. Can we combine it with
   -- some other requests into a cohesive whole?
