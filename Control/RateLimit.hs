@@ -141,11 +141,11 @@ generateRateLimitedFunction ratelimit action combiner = do
     let baseHandler resp = putMVar respMV resp
     -- can we combine this with any other requests on the pipe?
     (req', finalHandler) <- updateRequestWithFollowers chan req baseHandler
+    beforeRun <- currentMicroseconds
     if shouldFork ratelimit
       then forkIO (action req' >>= finalHandler) >> return ()
       else action req' >>= finalHandler
-    nextTime <- currentMicroseconds
-    runner nextTime chan
+    runner beforeRun chan
 
   -- updateRequestWithFollowers: We have one request. Can we combine it with
   -- some other requests into a cohesive whole?
