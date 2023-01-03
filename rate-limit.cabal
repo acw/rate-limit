@@ -20,7 +20,7 @@ Library
   Build-Depends: base       >= 4.0     && < 5.0
                , stm        >= 2.4     && < 2.6
                , time-units >= 1.0     && < 2.0
-               , time       >= 1.5.0.1 && < 1.10
+               , time       >= 1.5.0.1 && < 1.15
   Exposed-Modules: Control.RateLimit
 
 source-repository head
